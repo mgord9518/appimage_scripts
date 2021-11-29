@@ -1,0 +1,119 @@
+#!/bin/sh
+
+# Goal is to make a script to create AppImages for applications packed into a
+# tarball or zip with minimal modification per app
+
+# Variables
+[ -z "$TMPDIR" ] && TMPDIR='/tmp'
+[ -z "$ARCH" ]   && ARCH=$(uname -m)
+
+appName="Powder Toy"
+appBinName="powder"
+appImageName="$(echo $appName | tr ' ' '_')-$ARCH.AppImage"
+tempDir="$TMPDIR/.buildApp_$appName.$RANDOM"
+startDir="$PWD"
+appUrl='https://powdertoy.co.uk/Download/powder-lin64.zip'
+iconUrl='https://raw.githubusercontent.com/mgord9518/appimage_scripts/main/icons/powdertoy.svg'
+aiToolUrl='https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage'
+comp='xz'
+
+# Define what should be in the desktop entry
+entry="[Desktop Entry]
+Version=1.0
+Type=Application
+Name=$appName
+Comment=Physics sandbox game
+Exec=$appBinName
+Icon=$appBinName
+Terminal=false
+Categories=Game;Simulation;
+StartupWMClass=$appBinName
+X-AppImage-Version=$(curl -s https://powdertoy.co.uk | grep 'Version' | head -n 1 | tr -dc '0-9.')"
+# ^ Hacky one liner to parse version number from download on website. This may
+# break in the future if the website is redesigned
+
+printErr() {
+	echo -e "FATAL: $@"
+	echo 'Log:'
+	cat "$tempDir/out.log"
+	rm "$tempDir/out.log"
+	exit 1
+}
+
+# Create and move to working directory
+mkdir -p "$tempDir/AppDir/usr/bin" \
+         "$tempDir/AppDir/usr/share/icons/hicolor/scalable/apps"
+
+if [ ! $? = 0  ]; then
+	printErr 'Failed to create temporary directory.'
+fi
+
+cd "$tempDir"
+echo "Working directory: $tempDir"
+
+# Download and extract the latest zip
+# Unfortunately requires BSDTAR couldn't get unzip working with stdin
+# any alternative solutions welcome
+echo "Downloading and extracting $appName..."
+wget "$appUrl" -O - 2> "$tempDir/out.log" | bsdtar -Oxf - "$appBinName" > "AppDir/usr/bin/$appBinName"
+if [ ! $? = 0 ]; then
+	printErr "Failed to download '$appName' (make sure you're connected to the internet)"
+fi
+chmod +x "AppDir/usr/bin/$appBinName"
+
+# Download the icon
+wget "$iconUrl" -O "AppDir/usr/share/icons/hicolor/scalable/apps/$appBinName.svg" &> "$tempDir/out.log"
+if [ ! $? = 0 ]; then
+	printErr "Failed to download '$appBinName.svg' (make sure you're connected to the internet)"
+fi
+
+# Create desktop entry and link up executable and icons
+echo "$entry" > "AppDir/$appBinName.desktop"
+ln -s "./usr/bin/$appBinName" 'AppDir/AppRun'
+ln -s "./usr/share/icons/hicolor/scalable/apps/$appBinName.svg" "AppDir/$appBinName.svg"
+
+# Check if user has AppImageTool (under the names of `appimagetool.AppImage`
+# and `appimagetool-x86_64.AppImage`) if not, download it
+echo 'Checking if AppImageTool is installed...'
+if command -v 'appimagetool.AppImage' &> /dev/null; then
+	appimagetool() {
+		appimagetool.AppImage "$@"
+	}
+elif command -v 'appimagetool-x86_64.AppImage' &> /dev/null; then
+	appimagetool() {
+		appimagetool-x86_64.AppImage "$@"
+	}
+elif [ ! $(command -v 'appimagetool') ] &> /dev/null; then
+	echo "Nope! (couldn't find it) Downloading it now..."
+	wget "$aiToolUrl" -O 'appimagetool.AppImage' &> "$tempDir/out.log"
+	if [ ! $? = 0 ]; then
+		printErr "failed to download 'appimageTool.AppImage' (make sure you're connected to the internet)"
+	fi
+
+	chmod +x appimagetool.AppImage
+	appimagetool() {
+		./appimagetool.AppImage "$@"
+	}
+fi
+
+# Use the found AppImageTool to build our AppImage
+echo "Building $appName-$ARCH.AppImage..."
+ARCH="$ARCH" appimagetool --comp="$comp" 'AppDir/' &> "$tempDir/out.log"
+
+if [ ! $? = 0 ]; then
+	printErr "failed to build '$appName-$ARCH.AppImage'"
+fi
+
+# Take the newly created AppImage and move it into the starting directory
+if [ -f "$startDir/$appName-$ARCH.AppImage" ]; then
+	echo 'AppImage already exists; overwriting...'
+	rm "$startDir$appName-$ARCH.AppImage"
+fi
+
+mv "$appImageName" "$startDir/"
+
+# Remove all temporary files
+echo 'Cleaning up...'
+rm -rf "$tempDir"
+
+echo 'DONE!'
