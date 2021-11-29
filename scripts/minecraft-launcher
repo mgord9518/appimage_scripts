@@ -1,0 +1,111 @@
+#!/bin/sh
+
+# Variables
+[ -z "$TMPDIR" ] && TMPDIR='/tmp'
+[ -z "$ARCH" ]   && ARCH=$(uname -m)
+
+appName="Minecraft"
+appBinName="minecraft-launcher"
+tempDir="$TMPDIR/.buildApp_$appName.$RANDOM"
+startDir="$PWD"
+appUrl='https://launcher.mojang.com/download/Minecraft.tar.gz'
+iconUrl='https://launcher.mojang.com/download/minecraft-launcher.svg'
+aiToolUrl='https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage'
+comp='xz'
+
+# Define what should be in the desktop entry
+entry="[Desktop Entry]
+Version=1.0
+Type=Application
+Name=$appName
+Comment=Official Minecraft Launcher
+Exec=$appBinName
+Icon=$appBinName
+Terminal=false
+Categories=Game;Application;
+StartupWMClass=minecraft-launcher
+X-AppImage-Version=SELF_AUTO_UPDATE
+X-AppImage-Sandbox-Level=0"
+
+printErr() {
+	echo -e "FATAL: $@"
+	echo 'Log:'
+	cat "$tempDir/out.log"
+	rm "$tempDir/out.log"
+	exit 1
+}
+
+# Create and move to working directory
+mkdir -p "$tempDir/AppDir/usr/bin" \
+         "$tempDir/AppDir/usr/share/icons/hicolor/scalable/apps"
+
+if [ ! $? = 0  ]; then
+	printErr 'Failed to create temporary directory.'
+fi
+
+cd "$tempDir"
+echo "Working directory: $tempDir"
+
+# Download and extract the latest Minecraft tarball
+echo "Downloading and extracting $appName..."
+wget "$appUrl" -O - 2> "$tempDir/out.log" | tar -xz --strip-components=1 -C 'AppDir/usr/bin'
+if [ ! $? = 0 ]; then
+	printErr "Failed to download '$appName.tar.xz' (make sure you're connected to the internet)"
+fi
+
+# Download the Minecraft icon
+wget "$iconUrl" -O "AppDir/usr/share/icons/hicolor/scalable/apps/$appBinName.svg" &> "$tempDir/out.log"
+if [ ! $? = 0 ]; then
+	printErr "Failed to download '$appBinName.svg' (make sure you're connected to the internet)"
+fi
+
+# Create desktop entry and link up executable and icons
+echo "$entry" > "AppDir/$appBinName.desktop"
+ln -s "./usr/bin/$appBinName" 'AppDir/AppRun'
+ln -s "./usr/share/icons/hicolor/scalable/apps/$appBinName.svg" "AppDir/$appBinName.svg"
+
+# Check if user has AppImageTool (under the names of `appimagetool.AppImage`
+# and `appimagetool-x86_64.AppImage`) if not, download it
+echo 'Checking if AppImageTool is installed...'
+if command -v 'appimagetool.AppImage' &> /dev/null; then
+	appimagetool() {
+		appimagetool.AppImage "$@"
+	}
+elif command -v 'appimagetool-x86_64.AppImage' &> /dev/null; then
+	appimagetool() {
+		appimagetool-x86_64.AppImage "$@"
+	}
+elif [ ! $(command -v 'appimagetool') ] &> /dev/null; then
+	echo "Nope! (couldn't find it) Downloading it now..."
+	wget "$aiToolUrl" -O 'appimagetool.AppImage' &> "$tempDir/out.log"
+	if [ ! $? = 0 ]; then
+		printErr "failed to download 'appimageTool.AppImage' (make sure you're connected to the internet)"
+	fi
+
+	chmod +x appimagetool.AppImage
+	appimagetool() {
+		./appimagetool.AppImage "$@"
+	}
+fi
+
+# Use the found AppImageTool to build our AppImage
+echo "Building $appName-$ARCH.AppImage..."
+ARCH=x86_64 appimagetool --comp="$comp" 'AppDir/' &> "$tempDir/out.log"
+
+if [ ! $? = 0 ]; then
+	printErr "failed to build '$appName-$ARCH.AppImage'"
+fi
+
+# Take the newly created AppImage and move it into the starting directory
+if [ -f "$startDir/Minecraft-x86_64.AppImage" ]; then
+	echo 'AppImage already exists; overwriting...'
+	rm "$startDir/Minecraft-x86_64.AppImage"
+fi
+
+mv 'Minecraft-x86_64.AppImage' "$startDir/"
+
+# Remove all temporary files
+echo 'Cleaning up...'
+rm -rf "$tempDir"
+
+echo 'DONE! Enjoy playing!'
