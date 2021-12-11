@@ -7,15 +7,19 @@
 [ -z "$TMPDIR" ] && TMPDIR='/tmp'
 [ -z "$ARCH" ]   && ARCH=$(uname -m)
 
+aiVersion=$(curl -s https://powdertoy.co.uk | grep 'Version' | head -n 1 | tr -dc '0-9.')
+# ^ Hacky one liner to parse version number from download on website. This may
+# break in the future if the website is redesigned
+appId='uk.co.powdertoy.tpt'
 appName="Powder Toy"
+appImageName=$(echo $appName | tr ' ' '_')"-$aiVersion-$ARCH.AppImage"
 appBinName="powder"
-appImageName="$(echo $appName | tr ' ' '_')-$ARCH.AppImage"
 tempDir="$TMPDIR/.buildApp_$appName.$RANDOM"
 startDir="$PWD"
 appUrl='https://powdertoy.co.uk/Download/powder-lin64.zip'
 iconUrl='https://raw.githubusercontent.com/mgord9518/appimage_scripts/main/icons/powdertoy.svg'
 aiToolUrl='https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage'
-comp='xz'
+comp='gzip'
 
 # Define what should be in the desktop entry
 entry="[Desktop Entry]
@@ -24,13 +28,11 @@ Type=Application
 Name=$appName
 Comment=Physics sandbox game
 Exec=$appBinName
-Icon=$appBinName
+Icon=$appId
 Terminal=false
 Categories=Game;Simulation;
 StartupWMClass=$appBinName
-X-AppImage-Version=$(curl -s https://powdertoy.co.uk | grep 'Version' | head -n 1 | tr -dc '0-9.')"
-# ^ Hacky one liner to parse version number from download on website. This may
-# break in the future if the website is redesigned
+X-AppImage-Version="
 
 printErr() {
 	echo -e "FATAL: $@"
@@ -62,55 +64,64 @@ fi
 chmod +x "AppDir/usr/bin/$appBinName"
 
 # Download the icon
-wget "$iconUrl" -O "AppDir/usr/share/icons/hicolor/scalable/apps/$appBinName.svg" &> "$tempDir/out.log"
+wget "$iconUrl" -O "AppDir/usr/share/icons/hicolor/scalable/apps/$appId.svg" &> "$tempDir/out.log"
 if [ ! $? = 0 ]; then
-	printErr "Failed to download '$appBinName.svg' (make sure you're connected to the internet)"
+	printErr "Failed to download '$appId.svg' (make sure you're connected to the internet)"
 fi
 
 # Create desktop entry and link up executable and icons
-echo "$entry" > "AppDir/$appBinName.desktop"
+echo "$entry" > "AppDir/$appId.desktop"
 ln -s "./usr/bin/$appBinName" 'AppDir/AppRun'
-ln -s "./usr/share/icons/hicolor/scalable/apps/$appBinName.svg" "AppDir/$appBinName.svg"
+ln -s "./usr/share/icons/hicolor/scalable/apps/$appId.svg" "AppDir/$appId.svg"
 
 # Check if user has AppImageTool (under the names of `appimagetool.AppImage`
 # and `appimagetool-x86_64.AppImage`) if not, download it
 echo 'Checking if AppImageTool is installed...'
-if command -v 'appimagetool.AppImage' &> /dev/null; then
-	appimagetool() {
-		appimagetool.AppImage "$@"
+if command -v 'mkappimage.AppImage'; then
+	aitool() {
+		'mkappimage.AppImage' "$@"
 	}
-elif command -v 'appimagetool-x86_64.AppImage' &> /dev/null; then
-	appimagetool() {
-		appimagetool-x86_64.AppImage "$@"
+elif command -v "mkappimage-$ARCH.AppImage"; then
+	aitool() {
+		"mkappimage-$ARCH.AppImage" "$@"
 	}
-elif [ ! $(command -v 'appimagetool') ] &> /dev/null; then
-	echo "Nope! (couldn't find it) Downloading it now..."
-	wget "$aiToolUrl" -O 'appimagetool.AppImage' &> "$tempDir/out.log"
-	if [ ! $? = 0 ]; then
-		printErr "failed to download 'appimageTool.AppImage' (make sure you're connected to the internet)"
-	fi
-
-	chmod +x appimagetool.AppImage
-	appimagetool() {
-		./appimagetool.AppImage "$@"
+elif command -v "mkappimage-649-$ARCH.AppImage"; then
+	aitool() {
+		"mkappimage-649-$ARCH.AppImage" "$@"
 	}
+elif command -v 'mkappimage'; then
+	aitool() {
+		'mkappimage' "$@"
+	}
+elif command -v 'appimagetool'; then
+	aitool() {
+		'appimagetool' "$@"
+	}
+else
+	echo 'Failed to locate mkappimage or appimagetool in $PATH! Unable to build'
+	exit 1
 fi
 
-# Use the found AppImageTool to build our AppImage
-echo "Building $appName-$ARCH.AppImage..."
-ARCH="$ARCH" appimagetool --comp="$comp" 'AppDir/' &> "$tempDir/out.log"
+
+# Use the found mkappimage command to build our AppImage with update information
+echo "Building $appImageName..."
+ARCH="$ARCH" VERSION="$aiVersion" aitool --comp="$comp" -u \
+	"gh-releases-zsync|mgord9518|appimage_scripts|continuous|Powder_Toy-*$ARCH.AppImage.zsync" \
+	'AppDir/' # &> "$tempDir/out.log"
 
 if [ ! $? = 0 ]; then
-	printErr "failed to build '$appName-$ARCH.AppImage'"
+	printErr "failed to build '$appImageName'"
 fi
 
 # Take the newly created AppImage and move it into the starting directory
-if [ -f "$startDir/$appName-$ARCH.AppImage" ]; then
+if [ -f "$startDir/$appImageName" ]; then
 	echo 'AppImage already exists; overwriting...'
-	rm "$startDir$appName-$ARCH.AppImage"
+	rm "$startDir/$appImageName"
 fi
 
-mv "$appImageName" "$startDir/"
+# Move completed AppImage and zsync file to start directory
+mv $(echo $appName | tr ' ' '_')*"-$ARCH.AppImage" "$startDir"
+mv $(echo $appName | tr ' ' '_')*"-$ARCH.AppImage.zsync" "$startDir"
 
 # Remove all temporary files
 echo 'Cleaning up...'
